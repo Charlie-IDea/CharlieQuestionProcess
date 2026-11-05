@@ -1,0 +1,100 @@
+name: zhixu
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  env_file: .env
+  environment: &backend-env
+    DATABASE_URL: postgres://teaching:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/teaching
+    CELERY_BROKER_URL: amqp://teaching:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbit:5672//
+    TASKS_EAGER: '0'
+    BEHIND_PROXY: '1'
+  volumes:
+    - private_media:/app/private_media
+    - staticfiles:/app/staticfiles
+  depends_on:
+    db:
+      condition: service_healthy
+    rabbit:
+      condition: service_healthy
+  restart: unless-stopped
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: teaching
+      POSTGRES_USER: teaching
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U teaching -d teaching']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  rabbit:
+    image: rabbitmq:4-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: teaching
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD}
+    volumes:
+      - rabbit_data:/var/lib/rabbitmq
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    <<: *backend
+    command: [sh, -c, 'python manage.py migrate --noinput && python manage.py collectstatic --noinput']
+    restart: 'no'
+  api:
+    <<: *backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      rabbit:
+        condition: service_healthy
+  worker:
+    <<: *backend
+    command: [celery, -A, config, worker, --loglevel=INFO, --concurrency=2]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbit:
+        condition: service_healthy
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - '127.0.0.1:8080:80'
+    depends_on:
+      - api
+    restart: unless-stopped
+  beat:
+    <<: *backend
+    command: [celery, -A, config, beat, --loglevel=INFO, --schedule=/tmp/celerybeat-schedule]
+  caddy:
+    image: caddy:2-alpine
+    profiles: [production]
+    ports: ['80:80', '443:443']
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web]
+    restart: unless-stopped
+volumes:
+  postgres_data:
+  private_media:
+  staticfiles:
+  rabbit_data:
+  caddy_data:
+  caddy_config:

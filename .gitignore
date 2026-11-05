@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+backend/db.sqlite3
+backend/private_media/
+backend/staticfiles/
+frontend/node_modules/
+frontend/dist/
+.vite/
+test-results/
+*.log
+.pytest_cache/
+backups/
